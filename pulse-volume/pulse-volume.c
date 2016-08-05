@@ -7,7 +7,7 @@
 
 int main(int argc, char *const *argv) {
     static const char *context_name = "i3blocks-pulse-volume";
-    static const char *usage_str = "Usage: %s [-h] [-d] [-s INDEX] [-m FUNC]\n"
+    static const char *usage_str = "Usage: %s [-hduji] [-s INDEX] [-m FUNC]\n"
             "Options:\n"
             "  -s INDEX: pulseaudio sink index on which to wait for "
             "changes (default: 0)\n"
@@ -16,14 +16,27 @@ int main(int argc, char *const *argv) {
             "             * avg: use average volume of all channels (default)\n"
             "             * min: use minimum volume of all channels\n"
             "             * max: use maximum volume of all channels\n"
+            "  -c COLOR: use the specified color for display when muted. Only makes\n"
+	    "            sense if -j is used. Format: #RRGGBB (HTML) (default: #FF7F00)\n"
+	    "  -h      : display this message\n"
             "  -d      : use decibel notation instead of 0-100 percentage; "
             "the sink may\n"
-            "            not support this feature\n";
+            "            not support this feature\n"
+            "  -u      : include measurement units in the output (%% or dB)\n"
+            "  -j      : use JSON output. When muted, output is colored. See -c\n"
+            "  -i      : Prepend 'M' to the volume when muted instead of "
+	    "displaying 0\n";
+
 
     options_t options;
+    options.mute_color = malloc(16);
     options.calculator = pa_cvolume_avg;
     options.use_decibel = 0;
     options.observed_index = 0;
+    options.display_units = 0;
+    options.display_muted = 0;
+    options.output_json = 0;
+    strcpy(options.mute_color, "#FF7F00");
 
     sink_info_data_t sink_info_data;
     sink_info_data.sink_ready = 0;
@@ -38,7 +51,7 @@ int main(int argc, char *const *argv) {
     int pa_ready = CONN_WAIT;
 
     int opt;
-    while ((opt = getopt(argc, argv, "m:s:dh")) != -1) {
+    while ((opt = getopt(argc, argv, "m:s:c:dhuij")) != -1) {
         if (opt == 'm') {
             if (strcmp(optarg, "min") == 0) {
                 options.calculator = pa_cvolume_min;
@@ -63,8 +76,16 @@ int main(int argc, char *const *argv) {
                 fprintf(stderr, usage_str, argv[0]);
                 return 1;
             }
+	} else if (opt == 'c') {
+	    strncpy(options.mute_color, optarg, 8);
         } else if (opt == 'd') {
             options.use_decibel = 1;
+        } else if (opt == 'u') {
+            options.display_units = 1;
+        } else if (opt == 'i') {
+            options.display_muted = 1;
+        } else if (opt == 'j') {
+            options.output_json = 1;
         } else if (opt == 'h') {
             fprintf(stderr, usage_str, argv[0]);
             return 0;
@@ -181,6 +202,7 @@ int main(int argc, char *const *argv) {
         }
         pa_mainloop_iterate(pa_ml, 1, NULL);
     }
+    free(options.mute_color);
 }
 
 /**
@@ -257,23 +279,44 @@ void subscribe_cb(pa_context *ctx, pa_subscription_event_type_t type,
 void show_volume(const sink_info_t *sink_info, const options_t *options) {
     pa_volume_t volume;
     double v;
-    char txt[64];
+    char num[32], txt[48];
+    int flag = 1;
+    txt[0] = 0;
 
-    if (sink_info->mute)
-        volume = 0;
-    else
-        volume = options->calculator(&sink_info->volume);
+    if (sink_info->mute) {
+        if (options->display_muted) {
+            strcpy(txt, "M ");
+            flag = 1;
+        } else {
+            volume = flag = 0;
+        }
+    }
+    if (flag) volume = options->calculator(&sink_info->volume);
 
     v = (volume * 100) / PA_VOLUME_NORM;
     if (options->use_decibel) {
         double dB = pa_sw_volume_to_dB(volume);
         if (dB > PA_DECIBEL_MININFTY)
-            snprintf(txt, sizeof(txt), "%0.2f", dB);
+            snprintf(num, sizeof(txt), "%0.2f", dB);
         else
-            snprintf(txt, sizeof(txt), "inf");
+            snprintf(num, sizeof(txt), "-inf");
     } else {
-        snprintf(txt, sizeof(txt), "%0.0f", v);
+        snprintf(num, sizeof(txt), "%0.0f", v);
     }
-    printf("%s\n", txt);
+    strncat(txt, num, sizeof(num));
+    if (options->display_units) {
+        strcat(txt, options->use_decibel ? " dB" : "%");
+    }
+
+
+    if (options->output_json) {
+        if (sink_info->mute) {
+            printf("{\"full_text\":\"%s\",\"color\":\"%s\"}\n", txt, options->mute_color);
+        } else {
+            printf("{\"full_text\":\"%s\"}\n", txt);
+        }
+    } else {
+        printf("%s\n", txt);
+    }
     fflush(stdout);
 }
