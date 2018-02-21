@@ -5,38 +5,46 @@
 #include <errno.h>
 
 
+int caught_signal = 0;
+
+void signal_cb(int signum) {
+    caught_signal = signum;
+}
+
 int main(int argc, char *const *argv) {
     static const char *context_name = "i3blocks-pulse-volume";
-    static const char *usage_str = "Usage: %s [-hduji] [-s INDEX] [-m FUNC]\n"
-            "Options:\n"
-            "  -s INDEX: pulseaudio sink index on which to wait for "
-            "changes (default: 0)\n"
-            "  -m FUNC : function used to compute the displayed volume value\n"
-            "            in there are multiple channels (eg. left/right):\n"
-            "             * avg: use average volume of all channels (default)\n"
-            "             * min: use minimum volume of all channels\n"
-            "             * max: use maximum volume of all channels\n"
-            "  -c COLOR: use the specified color for display when muted. Only makes\n"
-	    "            sense if -j is used. Format: #RRGGBB (HTML) (default: #FF7F00)\n"
-	    "  -h      : display this message\n"
-            "  -d      : use decibel notation instead of 0-100 percentage; "
-            "the sink may\n"
-            "            not support this feature\n"
-            "  -u      : include measurement units in the output (%% or dB)\n"
-            "  -j      : use JSON output. When muted, output is colored. See -c\n"
-            "  -i      : Prepend 'M' to the volume when muted instead of "
-	    "displaying 0\n";
+    static const char *usage_str = \
+        "Usage: %s [-hduji] [-s INDEX] [-m FUNC]\n"
+        "Options:\n"
+        "  -s INDEX: pulseaudio sink index on which to wait for "
+        "changes (default: 0)\n"
+        "  -m FUNC : function used to compute the displayed volume value\n"
+        "            in there are multiple channels (eg. left/right):\n"
+        "             * avg: use average volume of all channels (default)\n"
+        "             * min: use minimum volume of all channels\n"
+        "             * max: use maximum volume of all channels\n"
+        "  -c COLOR: use the specified color for display when muted. Only makes\n"
+        "            sense if -j is used. Format: #RRGGBB (HTML) (default: #FF7F00)\n"
+        "  -h      : display this message\n"
+        "  -d      : use decibel notation instead of 0-100 percentage; "
+        "the sink may\n"
+        "            not support this feature\n"
+        "  -u      : include measurement units in the output (%% or dB)\n"
+        "  -j      : use JSON output. When muted, output is colored. See -c\n"
+        "  -i      : Prepend 'M' to the volume when muted instead of "
+        "displaying 0\n";
 
+    signal(SIGINT, signal_cb);
 
     options_t options;
-    options.mute_color = malloc(16);
     options.calculator = pa_cvolume_avg;
     options.use_decibel = 0;
     options.observed_index = 0;
     options.display_units = 0;
     options.display_muted = 0;
     options.output_json = 0;
-    strcpy(options.mute_color, "#FF7F00");
+    strncpy(options.mute_color, "#FF7F00", 7);
+    options.mute_color[7] = 0;
 
     sink_info_data_t sink_info_data;
     sink_info_data.sink_ready = 0;
@@ -76,8 +84,8 @@ int main(int argc, char *const *argv) {
                 fprintf(stderr, usage_str, argv[0]);
                 return 1;
             }
-	} else if (opt == 'c') {
-	    strncpy(options.mute_color, optarg, 8);
+        } else if (opt == 'c') {
+            strncpy(options.mute_color, optarg, 7);
         } else if (opt == 'd') {
             options.use_decibel = 1;
         } else if (opt == 'u') {
@@ -120,7 +128,7 @@ int main(int argc, char *const *argv) {
     pa_context_set_state_callback(pa_ctx, state_cb, &pa_ready);
     pa_context_set_subscribe_callback(pa_ctx, subscribe_cb, &sink_info_data);
 
-    while (1) {
+    while (caught_signal == 0) {
         if (pa_ready == CONN_WAIT) {
             pa_mainloop_iterate(pa_ml, 1, NULL);
             continue;
@@ -202,7 +210,8 @@ int main(int argc, char *const *argv) {
         }
         pa_mainloop_iterate(pa_ml, 1, NULL);
     }
-    free(options.mute_color);
+    fprintf(stderr, "caught signal %d, cleaning up.\n", caught_signal);
+    pa_mainloop_free(pa_ml);
 }
 
 /**
@@ -293,7 +302,6 @@ void show_volume(const sink_info_t *sink_info, const options_t *options) {
     }
     if (flag) volume = options->calculator(&sink_info->volume);
 
-    v = (volume * 100) / PA_VOLUME_NORM;
     if (options->use_decibel) {
         double dB = pa_sw_volume_to_dB(volume);
         if (dB > PA_DECIBEL_MININFTY)
@@ -301,13 +309,13 @@ void show_volume(const sink_info_t *sink_info, const options_t *options) {
         else
             snprintf(num, sizeof(txt), "-inf");
     } else {
+        v = (volume * 100 + PA_VOLUME_NORM-1) / PA_VOLUME_NORM;
         snprintf(num, sizeof(txt), "%0.0f", v);
     }
     strncat(txt, num, sizeof(num));
     if (options->display_units) {
         strcat(txt, options->use_decibel ? " dB" : "%");
     }
-
 
     if (options->output_json) {
         if (sink_info->mute) {

@@ -19,7 +19,7 @@ typedef struct options {
         display_units,
         display_muted,
         output_json;
-    char *mute_color;
+    char mute_color[8];
 } options_t;
 
 typedef struct sink_info {
