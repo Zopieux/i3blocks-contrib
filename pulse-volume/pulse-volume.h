@@ -15,7 +15,11 @@ enum state_t {
 typedef struct options {
     uint32_t observed_index;
     calculator_t calculator;
-    int use_decibel;
+    int use_decibel,
+        display_units,
+        display_muted,
+        output_json;
+    char mute_color[8];
 } options_t;
 
 typedef struct sink_info {
